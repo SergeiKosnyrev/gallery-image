@@ -1,0 +1,310 @@
+import { makeAutoObservable, runInAction } from 'mobx';
+import { getPhotos } from '../api/pexelsApi';
+import { Photo } from '../api/types';
+
+class PhotoStore {
+  photos: Photo[] = [];
+  page = 1;
+  isLoading = false;
+  error: string | null = null;
+  selectedPhoto: Photo | null = null;
+
+  constructor() {
+    makeAutoObservable(this);
+  }
+
+  async loadPhotos() {
+    this.isLoading = true;
+    this.error = null;
+    
+    try {
+      const newPhotos = await getPhotos(this.page);
+      runInAction(() => {
+        this.photos = [...this.photos, ...newPhotos];
+        this.page += 1;
+      });
+    } catch (error) {
+      runInAction(() => {
+        this.error = error.message;
+      });
+    } finally {
+      runInAction(() => {
+        this.isLoading = false;
+      });
+    }
+  }
+
+  async refreshPhotos() {
+    this.page = 1;
+    this.photos = [];
+    await this.loadPhotos();
+  }
+
+  selectPhoto(photo: Photo) {
+    this.selectedPhoto = photo;
+  }
+}
+
+export const photoStore = new PhotoStore();
+import axios from 'axios';
+import { Photo, PexelsResponse } from './types';
+
+const API_KEY = 'Df5DnLs4ASK36ktZYUxlxaBZBeL2tzaFoXpaFhnkHEMInbEYPi8UvCNW';
+const BASE_URL = 'https://gallery-page/v1';
+
+export const getPhotos = async (page: number): Promise<Photo[]> => {
+  try {
+    const response = await axios.get<PexelsResponse>(`${BASE_URL}/curated`, {
+      params: {
+        page,
+        per_page: 20,
+      },
+      headers: {
+        Authorization: API_KEY,
+      },
+    });
+    return response.data.photos;
+  } catch (error) {
+    throw new Error('Failed to fetch photos');
+  }
+};
+export interface Photo {
+  id: number;
+  width: number;
+  height: number;
+  url: string;
+  photographer: string;
+  photographer_url: string;
+  photographer_id: number;
+  avg_color: string;
+  src: {
+    original: string;
+    large2x: string;
+    large: string;
+    medium: string;
+    small: string;
+    portrait: string;
+    landscape: string;
+    tiny: string;
+  };
+}
+
+export interface PexelsResponse {
+  photos: Photo[];
+  page: number;
+  per_page: number;
+  total_results: number;
+  next_page: string;
+}
+import React from 'react';
+import { TouchableOpacity, StyleSheet } from 'react-native';
+import FastImage from 'react-native-fast-image';
+import { Photo } from '../api/types';
+
+interface PhotoItemProps {
+  photo: Photo;
+  onPress: () => void;
+}
+
+export const PhotoItem: React.FC<PhotoItemProps> = ({ photo, onPress }) => (
+  <TouchableOpacity onPress={onPress} style={styles.container}>
+    <FastImage
+      source={{ uri: photo.src.medium }}
+      style={styles.image}
+      resizeMode={FastImage.resizeMode.cover}
+    />
+  </TouchableOpacity>
+);
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    margin: 1,
+    aspectRatio: 1,
+  },
+  image: {
+    flex: 1,
+  },
+});
+import React, { useEffect } from 'react';
+import { FlatList, StyleSheet, RefreshControl } from 'react-native';
+import { observer } from 'mobx-react-lite';
+import { PhotoItem } from './PhotoItem';
+import { photoStore } from '../stores/photoStore';
+import { ErrorComponent } from './ErrorComponent';
+
+export const PhotoGrid = observer(() => {
+  useEffect(() => {
+    photoStore.loadPhotos();
+  }, []);
+
+  const handleRefresh = () => {
+    photoStore.refreshPhotos();
+  };
+
+  const loadMore = () => {
+    if (!photoStore.isLoading) {
+      photoStore.loadPhotos();
+    }
+  };
+
+  if (photoStore.error) {
+    return <ErrorComponent error={photoStore.error} onRetry={handleRefresh} />;
+  }
+
+  return (
+    <FlatList
+      data={photoStore.photos}
+      renderItem={({ item }) => (
+        <PhotoItem
+          photo={item}
+          onPress={() => photoStore.selectPhoto(item)}
+        />
+      )}
+      keyExtractor={(item) => item.id.toString()}
+      numColumns={3}
+      onEndReached={loadMore}
+      onEndReachedThreshold={0.5}
+      refreshControl={
+        <RefreshControl
+          refreshing={photoStore.isLoading && photoStore.page === 1}
+          onRefresh={handleRefresh}
+        />
+      }
+      contentContainerStyle={styles.container}
+    />
+  );
+});
+
+const styles = StyleSheet.create({
+  container: {
+    flexGrow: 1,
+  },
+});
+import React from 'react';
+import { StyleSheet, View, Dimensions } from 'react-native';
+import FastImage from 'react-native-fast-image';
+import { Photo } from '../api/types';
+
+interface PhotoViewerProps {
+  photo: Photo;
+}
+
+export const PhotoViewer: React.FC<PhotoViewerProps> = ({ photo }) => {
+  return (
+    <View style={styles.container}>
+      <FastImage
+        source={{ uri: photo.src.large2x }}
+        style={styles.image}
+        resizeMode={FastImage.resizeMode.contain}
+      />
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: 'black',
+  },
+  image: {
+    width: Dimensions.get('window').width,
+    height: Dimensions.get('window').height,
+  },
+});
+import React from 'react';
+import { View, Text, Button, StyleSheet } from 'react-native';
+
+interface ErrorComponentProps {
+  error: string;
+  onRetry: () => void;
+}
+
+export const ErrorComponent: React.FC<ErrorComponentProps> = ({ error, onRetry }) => (
+  <View style={styles.container}>
+    <Text style={styles.errorText}>{error}</Text>
+    <Button title="Retry" onPress={onRetry} />
+  </View>
+);
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  errorText: {
+    color: 'red',
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+});
+import React from 'react';
+import { SafeAreaView, StyleSheet } from 'react-native';
+import { observer } from 'mobx-react-lite';
+import { PhotoGrid } from '../components/PhotoGrid';
+import { photoStore } from '../stores/photoStore';
+
+export const HomeScreen = observer(() => {
+  return (
+    <SafeAreaView style={styles.container}>
+      <PhotoGrid />
+    </SafeAreaView>
+  );
+});
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
+});
+import React from 'react';
+import { StyleSheet, SafeAreaView } from 'react-native';
+import { observer } from 'mobx-react-lite';
+import { PhotoViewer } from '../components/PhotoViewer';
+import { photoStore } from '../stores/photoStore';
+
+export const PhotoDetailScreen = observer(() => {
+  return (
+    <SafeAreaView style={styles.container}>
+      {photoStore.selectedPhoto && (
+        <PhotoViewer photo={photoStore.selectedPhoto} />
+      )}
+    </SafeAreaView>
+  );
+});
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: 'black',
+  },
+});
+import React from 'react';
+import { NavigationContainer } from '@react-navigation/native';
+import { createStackNavigator } from '@react-navigation/stack';
+import { HomeScreen } from './screens/HomeScreen';
+import { PhotoDetailScreen } from './screens/PhotoDetailScreen';
+
+const Stack = createStackNavigator();
+
+export const App = () => {
+  return (
+    <NavigationContainer>
+      <Stack.Navigator>
+        <Stack.Screen
+          name="Home"
+          component={HomeScreen}
+          options={{ title: 'Photo Gallery' }}
+        />
+        <Stack.Screen
+          name="PhotoDetail"
+          component={PhotoDetailScreen}
+          options={{ title: 'Photo', headerShown: false }}
+        />
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
+};
