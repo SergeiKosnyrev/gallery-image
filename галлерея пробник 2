@@ -1,0 +1,195 @@
+export interface Photo {
+  id: number;
+  photographer: string;
+  src: {
+    original: string;
+    medium: string;
+    small: string;
+  };
+  alt: string;
+}
+import axios from 'axios';
+import { Photo } from './types';
+
+const API_KEY = 'EOdEdDHnJolS9BLPvYvmpplHVIncnOjdJ8S9NSh8iTijZ4YY3SXzV3Xg';
+const BASE_URL = 'https://api.pexels.com/v1/curated';
+
+export async function getPhotos(page: number = 1, perPage: number = 20): Promise<Photo[]> {
+  const response = await axios.get(BASE_URL, {
+    headers: { Authorization: API_KEY },
+    params: { page, per_page: perPage },
+  });
+  return response.data.photos;
+}
+import { makeAutoObservable, runInAction } from 'mobx';
+import { getPhotos } from '../api/pexelsApi';
+import { Photo } from '../api/types';
+
+class PhotoStore {
+  photos: Photo[] = [];
+  page = 1;
+  isLoading = false;
+  error: string | null = null;
+  selectedPhoto: Photo | null = null;
+
+  constructor() {
+    makeAutoObservable(this);
+  }
+
+  async loadPhotos() {
+    this.isLoading = true;
+    this.error = null;
+    try {
+      const newPhotos = await getPhotos(this.page);
+      runInAction(() => {
+        this.photos = [...this.photos, ...newPhotos];
+        this.page += 1;
+      });
+    } catch (e: any) {
+      runInAction(() => {
+        this.error = e.message;
+      });
+    } finally {
+      runInAction(() => {
+        this.isLoading = false;
+      });
+    }
+  }
+
+  async refreshPhotos() {
+    this.isLoading = true;
+    this.error = null;
+    try {
+      const refreshedPhotos = await getPhotos(1);
+      runInAction(() => {
+        this.photos = refreshedPhotos;
+        this.page = 2;
+      });
+    } catch (e: any) {
+      runInAction(() => {
+        this.error = e.message;
+      });
+    } finally {
+      runInAction(() => {
+        this.isLoading = false;
+      });
+    }
+  }
+
+  setSelectedPhoto(photo: Photo | null) {
+    this.selectedPhoto = photo;
+  }
+}
+
+export default new PhotoStore();
+import React, { useEffect } from 'react';
+import { View, Text, FlatList, RefreshControl, TouchableOpacity, Image, ActivityIndicator } from 'react-native';
+import { observer } from 'mobx-react-lite';
+import PhotoStore from '../stores/PhotoStore';
+import { useNavigation } from '@react-navigation/native';
+
+const GalleryScreen = observer(() => {
+  const navigation = useNavigation();
+
+  useEffect(() => {
+    PhotoStore.loadPhotos();
+  }, []);
+
+  const loadMore = () => {
+    if (!PhotoStore.isLoading) {
+      PhotoStore.loadPhotos();
+    }
+  };
+
+  const refresh = () => {
+    PhotoStore.refreshPhotos();
+  };
+
+  if (PhotoStore.error) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <Text>Ошибка: {PhotoStore.error}</Text>
+        <TouchableOpacity onPress={refresh}>
+          <Text>Повторить</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  return (
+    <FlatList
+      data={PhotoStore.photos}
+      numColumns={2}
+      keyExtractor={item => item.id.toString()}
+      renderItem={({ item }) => (
+        <TouchableOpacity
+          onPress={() => {
+            PhotoStore.setSelectedPhoto(item);
+            navigation.navigate('PhotoView');
+          }}
+          style={{ flex: 1, margin: 4 }}
+        >
+          <Image source={{ uri: item.src.medium }} style={{ height: 150, borderRadius: 8 }} />
+        </TouchableOpacity>
+      )}
+      onEndReached={loadMore}
+      onEndReachedThreshold={0.5}
+      refreshControl={
+        <RefreshControl refreshing={PhotoStore.isLoading} onRefresh={refresh} />
+      }
+      ListFooterComponent={PhotoStore.isLoading ? <ActivityIndicator /> : null}
+    />
+  );
+});
+
+export default GalleryScreen;
+import React from 'react';
+import { View, Image, Text, StyleSheet } from 'react-native';
+import { observer } from 'mobx-react-lite';
+import PhotoStore from '../stores/PhotoStore';
+
+const PhotoViewScreen = observer(() => {
+  const photo = PhotoStore.selectedPhoto;
+  if (!photo) return null;
+  return (
+    <View style={styles.container}>
+      <Image source={{ uri: photo.src.original }} style={styles.image} resizeMode="contain" />
+      <Text style={styles.photographer}>{photo.photographer}</Text>
+      <Text>{photo.alt}</Text>
+    </View>
+  );
+});
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center' },
+  image: { width: '100%', height: '70%' },
+  photographer: { fontWeight: 'bold', marginVertical: 8 },
+});
+
+export default PhotoViewScreen;
+import React from 'react';
+import { createStackNavigator } from '@react-navigation/stack';
+import GalleryScreen from '../screens/GalleryScreen';
+import PhotoViewScreen from '../screens/PhotoViewScreen';
+
+const Stack = createStackNavigator();
+
+export default function AppNavigator() {
+  return (
+    <Stack.Navigator>
+      <Stack.Screen name="Gallery" component={GalleryScreen} options={{ title: 'Фотогалерея' }} />
+      <Stack.Screen name="PhotoView" component={PhotoViewScreen} options={{ title: 'Фото' }} />
+    </Stack.Navigator>
+  );
+}
+import React from 'react';
+import { NavigationContainer } from '@react-navigation/native';
+import AppNavigator from './navigation/AppNavigator';
+
+export default function App() {
+  return (
+    <NavigationContainer>
+      <AppNavigator />
+    </NavigationContainer>
+  );
+}
